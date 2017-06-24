@@ -1,250 +1,67 @@
 package godaddy
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
-	"github.com/StackExchange/dnscontrol/models"
+  "github.com/StackExchange/dnscontrol/models"
 	"github.com/StackExchange/dnscontrol/providers"
-	"github.com/StackExchange/dnscontrol/providers/diff"
 )
 
+
+type GoDaddyApi struct {
+  APIKey  				string `json:"apikey"`
+  APISecret 			string `json:"apisecret"`
+	domainIndex     map[string]int
+}
+
+
+// func newReg(conf map[string]string) (providers.Registrar, error) {
+// 	return newProvider(conf, nil)
+// }
+
+func newDsp(conf map[string]string, metadata json.RawMessage) (providers.DNSServiceProvider, error) {
+	return newProvider(conf, metadata)
+}
+
+func newProvider(conf map[string]string, metadata json.RawMessage) (*GoDaddyApi, error) {
+	api := &GoDaddyApi{}
+	api.APISecret, api.APIKey = conf["apisecret"], conf["apikey"]
+	if api.APIKey == "" || api.APISecret == "" {
+		return nil, fmt.Errorf("GoDaddy apikey and apisecret must be provided.")
+	}
+	return api, nil
+}
+
 func init() {
-	providers.RegisterDomainServiceProviderType("GODADDY", NewProvider);
-}
-
-func NewProvider(cfg map[string]string, metadata json.RawMessage) (providers.DNSServiceProvider, error){
-	return nil, nil
-}
-
-func GetNameservers(domain string) ([]*models.Nameserver, error){
-	examples := []string{"domain1", "domain2"}
-
-	return models.StringsToNameservers(examples), nil
+	// providers.RegisterRegistrarType("GODADDY", newReg)
+	providers.RegisterDomainServiceProviderType("GODADDY", newDsp)
 }
 
 
+func (c *GoDaddyApi) GetNameservers(domain string) ([]*models.Nameserver, error){
+	details, err := c.fetchDomain(domain)
+	if err != nil {
+		return nil, fmt.Errorf("Couldn't get nameservers for GoDaddy domain '%s': %s", domain, err)
+	}
 
+	return models.StringsToNameservers(details.Nameservers), nil
+}
 
+func (c *GoDaddyApi) GetDomainCorrections(dc *models.DomainConfig) ([]*models.Correction, error) {
+  if err := dc.Punycode(); err != nil {
+    return nil, err
+  }
 
-// type gcloud struct {
-// 	client  *dns.Service
-// 	project string
-// 	zones   map[string]*dns.ManagedZone
-// }
+  // get records for the domain
+  records, err := c.getRecordsForDomain(dc.Name)
+  if err != nil {
+  	return nil, fmt.Errorf("Couldn't get DNS records for GoDaddy domain '%s': %s", dc.Name, err)
+  }
 
-// // New creates a new gcloud provider
-// func New(cfg map[string]string, _ json.RawMessage) (providers.DNSServiceProvider, error) {
-// 	raw, err := json.Marshal(cfg)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	config, err := gauth.JWTConfigFromJSON(raw, "https://www.googleapis.com/auth/ndev.clouddns.readwrite")
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	ctx := context.Background()
-// 	hc := config.Client(ctx)
-// 	dcli, err := dns.New(hc)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	return &gcloud{
-// 		client:  dcli,
-// 		project: cfg["project_id"],
-// 	}, nil
-// }
+  for _, rec := range records {
+  	fmt.Printf("DEBUG: %s \t %s \t %#v\n", rec.Type, rec.Name, rec.Target)
+  }
 
-// type errNoExist struct {
-// 	domain string
-// }
-
-// func (e errNoExist) Error() string {
-// 	return fmt.Sprintf("Domain %s not found in gcloud account", e.domain)
-// }
-
-// func (g *gcloud) getZone(domain string) (*dns.ManagedZone, error) {
-// 	if g.zones == nil {
-// 		g.zones = map[string]*dns.ManagedZone{}
-// 		pageToken := ""
-// 		for {
-// 			resp, err := g.client.ManagedZones.List(g.project).PageToken(pageToken).Do()
-// 			if err != nil {
-// 				return nil, err
-// 			}
-// 			for _, z := range resp.ManagedZones {
-// 				g.zones[z.DnsName] = z
-// 			}
-// 			if pageToken = resp.NextPageToken; pageToken == "" {
-// 				break
-// 			}
-// 		}
-// 	}
-// 	if g.zones[domain+"."] == nil {
-// 		return nil, errNoExist{domain}
-// 	}
-// 	return g.zones[domain+"."], nil
-// }
-
-// func (g *gcloud) GetNameservers(domain string) ([]*models.Nameserver, error) {
-// 	zone, err := g.getZone(domain)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	return models.StringsToNameservers(zone.NameServers), nil
-// }
-
-// type key struct {
-// 	Type string
-// 	Name string
-// }
-
-// func keyFor(r *dns.ResourceRecordSet) key {
-// 	return key{Type: r.Type, Name: r.Name}
-// }
-// func keyForRec(r *models.RecordConfig) key {
-// 	return key{Type: r.Type, Name: r.NameFQDN + "."}
-// }
-
-// func (g *gcloud) GetDomainCorrections(dc *models.DomainConfig) ([]*models.Correction, error) {
-// 	if err := dc.Punycode(); err != nil {
-// 		return nil, err
-// 	}
-// 	rrs, zoneName, err := g.getRecords(dc.Name)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	//convert to dnscontrol RecordConfig format
-// 	existingRecords := []*models.RecordConfig{}
-// 	oldRRs := map[key]*dns.ResourceRecordSet{}
-// 	for _, set := range rrs {
-// 		nameWithoutDot := set.Name
-// 		if strings.HasSuffix(nameWithoutDot, ".") {
-// 			nameWithoutDot = nameWithoutDot[:len(nameWithoutDot)-1]
-// 		}
-// 		oldRRs[keyFor(set)] = set
-// 		for _, rec := range set.Rrdatas {
-// 			r := &models.RecordConfig{
-// 				NameFQDN: nameWithoutDot,
-// 				Type:     set.Type,
-// 				Target:   rec,
-// 				TTL:      uint32(set.Ttl),
-// 			}
-// 			existingRecords = append(existingRecords, r)
-// 		}
-// 	}
-
-// 	for _, want := range dc.Records {
-// 		if want.Type == "MX" {
-// 			want.Target = fmt.Sprintf("%d %s", want.Priority, want.Target)
-// 			want.Priority = 0
-// 		} else if want.Type == "TXT" {
-// 			//add quotes to txts
-// 			want.Target = fmt.Sprintf(`"%s"`, want.Target)
-// 		}
-// 	}
-
-// 	// first collect keys that have changed
-// 	differ := diff.New(dc)
-// 	_, create, delete, modify := differ.IncrementalDiff(existingRecords)
-// 	changedKeys := map[key]bool{}
-// 	desc := ""
-// 	for _, c := range create {
-// 		desc += fmt.Sprintln(c)
-// 		changedKeys[keyForRec(c.Desired)] = true
-// 	}
-// 	for _, d := range delete {
-// 		desc += fmt.Sprintln(d)
-// 		changedKeys[keyForRec(d.Existing)] = true
-// 	}
-// 	for _, m := range modify {
-// 		desc += fmt.Sprintln(m)
-// 		changedKeys[keyForRec(m.Existing)] = true
-// 	}
-// 	if len(changedKeys) == 0 {
-// 		return nil, nil
-// 	}
-// 	chg := &dns.Change{Kind: "dns#change"}
-// 	for ck := range changedKeys {
-// 		// remove old version (if present)
-// 		if old, ok := oldRRs[ck]; ok {
-// 			chg.Deletions = append(chg.Deletions, old)
-// 		}
-// 		//collect records to replace with
-// 		newRRs := &dns.ResourceRecordSet{
-// 			Name: ck.Name,
-// 			Type: ck.Type,
-// 			Kind: "dns#resourceRecordSet",
-// 		}
-// 		for _, r := range dc.Records {
-// 			if keyForRec(r) == ck {
-// 				newRRs.Rrdatas = append(newRRs.Rrdatas, r.Target)
-// 				newRRs.Ttl = int64(r.TTL)
-// 			}
-// 		}
-// 		if len(newRRs.Rrdatas) > 0 {
-// 			chg.Additions = append(chg.Additions, newRRs)
-// 		}
-// 	}
-
-// 	runChange := func() error {
-// 		_, err := g.client.Changes.Create(g.project, zoneName, chg).Do()
-// 		return err
-// 	}
-// 	return []*models.Correction{{
-// 		Msg: desc,
-// 		F:   runChange,
-// 	}}, nil
-// }
-
-// func (g *gcloud) getRecords(domain string) ([]*dns.ResourceRecordSet, string, error) {
-// 	zone, err := g.getZone(domain)
-// 	if err != nil {
-// 		return nil, "", err
-// 	}
-// 	pageToken := ""
-// 	sets := []*dns.ResourceRecordSet{}
-// 	for {
-// 		call := g.client.ResourceRecordSets.List(g.project, zone.Name)
-// 		if pageToken != "" {
-// 			call = call.PageToken(pageToken)
-// 		}
-// 		resp, err := call.Do()
-// 		if err != nil {
-// 			return nil, "", err
-// 		}
-// 		for _, rrs := range resp.Rrsets {
-// 			if rrs.Type == "SOA" {
-// 				continue
-// 			}
-// 			sets = append(sets, rrs)
-// 		}
-// 		if pageToken = resp.NextPageToken; pageToken == "" {
-// 			break
-// 		}
-// 	}
-// 	return sets, zone.Name, nil
-// }
-
-// func (g *gcloud) EnsureDomainExists(domain string) error {
-// 	z, err := g.getZone(domain)
-// 	if err != nil {
-// 		if _, ok := err.(errNoExist); !ok {
-// 			return err
-// 		}
-// 	}
-// 	if z != nil {
-// 		return nil
-// 	}
-// 	fmt.Printf("Adding zone for %s to gcloud account\n", domain)
-// 	mz := &dns.ManagedZone{
-// 		DnsName:     domain + ".",
-// 		Name:        strings.Replace(domain, ".", "-", -1),
-// 		Description: "zone added by dnscontrol",
-// 	}
-// 	g.zones = nil //reset cache
-// 	_, err = g.client.ManagedZones.Create(g.project, mz).Do()
-// 	return err
-// }
+  return nil, nil
+}
