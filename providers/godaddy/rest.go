@@ -13,46 +13,25 @@ import (
   // "strconv"
 
   "github.com/StackExchange/dnscontrol/models"
+  "github.com/miekg/dns/dnsutil"
 )
 
-type zoneResponse struct {
-  Domain        string    `json:"domain"`
-  DomainId      int       `json:"domainId"`
-  Expires       string    `json:"expires`
-  Status        string    `json:"status"`
-  Nameservers []string    `json:"nameServers"`
-}
-type zoneResponses []zoneResponse
-
-type recordsResponse struct {
-  Type      string  `json:"type"`
-  Name      string  `json:"name"`
-  Data      string  `json:"data"`
-  Priority  uint16  `json:"priority"`
-  TTL       uint32  `json:"ttl"`
-  Service   string  `json:"service"`
-  Protocol  string  `json:"protocol"`
-  Port      int     `json:"port"`
-  Weight    int     `json:"weight"`
-}
-type recordsResponses []recordsResponse
-
 // get list of domains for account. Cache so the ids can be looked up from domain name
-func (c *GoDaddyApi) fetchDomainList() error {
-  c.domainIndex = map[string]int{}
+// func (c *GoDaddyApi) fetchDomainList() error {
+//   c.domainIndex = map[string]int{}
 
-  zr := &zoneResponses{}
-  url := fmt.Sprintf("%s/domains", apiBase)
-  if err := c.get(url, zr); err != nil {
-    return fmt.Errorf("Error fetching domain list from GoDaddy: %s", err)
-  }
+//   zr := &zoneResponses{}
+//   url := fmt.Sprintf("%s/domains", apiBase)
+//   if err := c.get(url, zr); err != nil {
+//     return fmt.Errorf("Error fetching domain list from GoDaddy: %s", err)
+//   }
 
-  for _, zone := range *zr {
-    c.domainIndex[zone.Domain] = zone.DomainId
-  }
+//   for _, zone := range *zr {
+//     c.domainIndex[zone.Domain] = zone.DomainId
+//   }
 
-  return nil
-}
+//   return nil
+// }
 
 // get domain details
 func (c *GoDaddyApi) fetchDomain(domain string) (*zoneResponse, error) {
@@ -62,34 +41,42 @@ func (c *GoDaddyApi) fetchDomain(domain string) (*zoneResponse, error) {
     return nil, err
   }
 
-// fmt.Printf("\nDEBUG: %#v\n", resp)
   return resp, nil
 }
 
 
 
-// get all records for a domain
+// Get all records for a domain from the GoDaddy API and normalize them
 func (c *GoDaddyApi) getRecordsForDomain(domain string) ([]*models.RecordConfig, error) {
   records := []*models.RecordConfig{}
 
-  resp := &recordsResponses{}
+  resp := &godaddyRecords{}
   url := fmt.Sprintf("%s/domains/%s/records", apiBase, domain)
   if err := c.get(url, resp); err != nil {
     return nil, err
   }
 
+  // Normalize the GoDaddy record layout to fit the expected dnscontrol struct
   for _, rec := range *resp {
-    // fmt.Printf("\nDEBUG: %#v\n", rec.Name)
+    if rec.Type == "CNAME" && rec.Data == "@" {
+      // GoDaddy uses "@" as a placeholder for the domain, but dnscontrol doesn't like that
+      rec.Data = fmt.Sprintf("%s.", domain)
+    } else {
+      if rec.Type == "CNAME" || rec.Type == "MX" || rec.Type == "NS" {
+        // GoDaddy doesn't have a trailing "." at the end of their records, which dnscontrol wants
+        rec.Data = dnsutil.AddOrigin(rec.Data+".", domain)
+      }
+    }
+
     record := &models.RecordConfig {
       Type: rec.Type,
       Name: rec.Name,
       Target: rec.Data,
       TTL: rec.TTL,
-      Priority: rec.Priority }
+      NameFQDN: dnsutil.AddOrigin(rec.Name, domain),
+      Priority: rec.Priority,
+    }
 
-      if rec.Type == "CNAME" {
-        record.Target += "."
-      }
     records = append(records, record)
   }
 
@@ -110,13 +97,6 @@ func apiGetDomain(domain string) string {
 func (c *GoDaddyApi) addAuth(r *http.Request) {
   r.Header.Add("Authorization", fmt.Sprintf("sso-key %s:%s", c.APIKey, c.APISecret))
 }
-
-// type apiResult struct {
-//   Result struct {
-//     Code    int    `json:"code"`
-//     Message string `json:"message"`
-//   } `json:"result"`
-// }
 
 var apiBase = "https://api.godaddy.com/v1"
 

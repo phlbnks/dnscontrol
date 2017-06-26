@@ -104,6 +104,7 @@ func (d *differ) IncrementalDiff(existing []*models.RecordConfig) (unchanged, cr
 		// build index based on normalized content data
 		for _, ex := range existingRecords {
 			normalized := d.content(ex)
+// fmt.Printf("DIFF: %s \t %s\n", ex, normalized)
 			if existingLookup[normalized] != nil {
 				panic(fmt.Sprintf("DUPLICATE E_RECORD FOUND: %s %s", key, normalized))
 			}
