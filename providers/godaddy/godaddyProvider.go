@@ -10,13 +10,13 @@ import (
 	"github.com/StackExchange/dnscontrol/providers/diff"
 )
 
-
-type GoDaddyApi struct {
-  APIKey  				string `json:"apikey"`
-  APISecret 			string `json:"apisecret"`
-	domainIndex     map[string]int
+// **************************
+// Initializations
+// **************************
+func init() {
+	// providers.RegisterRegistrarType("GODADDY", newReg)
+	providers.RegisterDomainServiceProviderType("GODADDY", newDsp)
 }
-
 
 // func newReg(conf map[string]string) (providers.Registrar, error) {
 // 	return newProvider(conf, nil)
@@ -35,13 +35,11 @@ func newProvider(conf map[string]string, metadata json.RawMessage) (*GoDaddyApi,
 	return api, nil
 }
 
-func init() {
-	// providers.RegisterRegistrarType("GODADDY", newReg)
-	providers.RegisterDomainServiceProviderType("GODADDY", newDsp)
-}
 
 
-
+// **************************
+// Main functions
+// **************************
 func (c *GoDaddyApi) GetNameservers(domain string) ([]*models.Nameserver, error){
 	details, err := c.fetchDomain(domain)
 	if err != nil {
