@@ -42,7 +42,7 @@ func newRoute53(m map[string]string, metadata json.RawMessage) (providers.DNSSer
 }
 
 func init() {
-	providers.RegisterDomainServiceProviderType("ROUTE53", newRoute53)
+	providers.RegisterDomainServiceProviderType("ROUTE53", newRoute53, providers.CanUsePTR, providers.CanUseSRV)
 }
 func sPtr(s string) *string {
 	return &s
@@ -133,21 +133,17 @@ func (r *route53Provider) GetDomainCorrections(dc *models.DomainConfig) ([]*mode
 				continue
 			}
 			r := &models.RecordConfig{
-				NameFQDN: unescape(set.Name),
-				Type:     *set.Type,
-				Target:   *rec.Value,
-				TTL:      uint32(*set.TTL),
+				NameFQDN:       unescape(set.Name),
+				Type:           *set.Type,
+				Target:         *rec.Value,
+				TTL:            uint32(*set.TTL),
+				CombinedTarget: true,
 			}
 			existingRecords = append(existingRecords, r)
 		}
 	}
 	for _, want := range dc.Records {
-		if want.Type == "MX" {
-			want.Target = fmt.Sprintf("%d %s", want.Priority, want.Target)
-			want.Priority = 0
-		} else if want.Type == "TXT" {
-			want.Target = fmt.Sprintf(`"%s"`, want.Target) //FIXME: better escaping/quoting
-		}
+		want.MergeToTarget()
 	}
 
 	//diff
@@ -224,14 +220,15 @@ func (r *route53Provider) GetDomainCorrections(dc *models.DomainConfig) ([]*mode
 	changeReq := &r53.ChangeResourceRecordSetsInput{
 		ChangeBatch: &r53.ChangeBatch{Changes: changes},
 	}
+
 	delReq := &r53.ChangeResourceRecordSetsInput{
 		ChangeBatch: &r53.ChangeBatch{Changes: dels},
 	}
 
-	addCorrection := func(req *r53.ChangeResourceRecordSetsInput) {
+	addCorrection := func(msg string, req *r53.ChangeResourceRecordSetsInput) {
 		corrections = append(corrections,
 			&models.Correction{
-				Msg: changeDesc,
+				Msg: msg,
 				F: func() error {
 					req.HostedZoneId = zone.Id
 					_, err := r.client.ChangeResourceRecordSets(req)
@@ -239,11 +236,13 @@ func (r *route53Provider) GetDomainCorrections(dc *models.DomainConfig) ([]*mode
 				},
 			})
 	}
+
 	if len(dels) > 0 {
-		addCorrection(delReq)
+		addCorrection(delDesc, delReq)
 	}
+
 	if len(changes) > 0 {
-		addCorrection(changeReq)
+		addCorrection(changeDesc, changeReq)
 	}
 
 	return corrections, nil

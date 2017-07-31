@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/miekg/dns"
@@ -38,18 +39,49 @@ func (z *zoneGenData) Less(i, j int) bool {
 	if rrtypeA != rrtypeB {
 		return zoneRrtypeLess(rrtypeA, rrtypeB)
 	}
-	if rrtypeA == dns.TypeA {
+	switch rrtypeA {
+	case dns.TypeNS, dns.TypeTXT:
+		// pass through.
+	case dns.TypeA:
 		ta2, tb2 := a.(*dns.A), b.(*dns.A)
 		ipa, ipb := ta2.A.To4(), tb2.A.To4()
 		if ipa == nil || ipb == nil {
 			log.Fatalf("should not happen: IPs are not 4 bytes: %#v %#v", ta2, tb2)
 		}
 		return bytes.Compare(ipa, ipb) == -1
-	}
-	if rrtypeA == dns.TypeMX {
+	case dns.TypeMX:
 		ta2, tb2 := a.(*dns.MX), b.(*dns.MX)
 		pa, pb := ta2.Preference, tb2.Preference
 		return pa < pb
+	case dns.TypeSRV:
+		ta2, tb2 := a.(*dns.SRV), b.(*dns.SRV)
+		pa, pb := ta2.Port, tb2.Port
+		if pa != pb {
+			return pa < pb
+		}
+		pa, pb = ta2.Priority, tb2.Priority
+		if pa != pb {
+			return pa < pb
+		}
+		pa, pb = ta2.Weight, tb2.Weight
+		if pa != pb {
+			return pa < pb
+		}
+	case dns.TypeCAA:
+		ta2, tb2 := a.(*dns.CAA), b.(*dns.CAA)
+		// sort by tag
+		pa, pb := ta2.Tag, tb2.Tag
+		if pa != pb {
+			return pa < pb
+		}
+		// then flag
+		fa, fb := ta2.Flag, tb2.Flag
+		if fa != fb {
+			// flag set goes before ones without flag set
+			return fa > fb
+		}
+	default:
+		panic(fmt.Sprintf("zoneGenData Less: unimplemented rtype %v", dns.TypeToString[rrtypeA]))
 	}
 	return a.String() < b.String()
 }
@@ -91,6 +123,7 @@ func WriteZoneFile(w io.Writer, records []dns.RR, origin string) error {
 	//   be easy to read and pleasant to the eye.
 	// * Within a label, SOA and NS records are listed first.
 	// * MX records are sorted numericly by preference value.
+	// * SRV records are sorted numericly by port, then priority, then weight.
 	// * A records are sorted by IP address, not lexicographically.
 	// * Repeated labels are removed.
 	// * $TTL is used to eliminate clutter. The most common TTL value is used.
@@ -147,7 +180,7 @@ func (z *zoneGenData) generateZoneFileHelper(w io.Writer) error {
 
 		// items[2]: class
 		if hdr.Class != dns.ClassINET {
-			log.Fatalf("Unimplemented class=%v", items[2])
+			log.Fatalf("generateZoneFileHelper: Unimplemented class=%v", items[2])
 		}
 
 		// items[3]: type
@@ -178,6 +211,11 @@ func formatLine(lengths []int, fields []string) string {
 		c += length + 1
 	}
 	return strings.TrimRight(result, " ")
+}
+
+func isNumeric(s string) bool {
+	_, err := strconv.ParseFloat(s, 64)
+	return err == nil
 }
 
 func zoneLabelLess(a, b string) bool {
@@ -221,8 +259,30 @@ func zoneLabelLess(a, b string) bool {
 
 	// Skip the matching highest elements, then compare the next item.
 	for i, j := ia, ib; min >= 0; i, j, min = i-1, j-1, min-1 {
+		// Compare as[i] < bs[j]
+		// Sort @ at the top, then *, then everything else.
+		// i.e. @ always is less. * is is less than everything but @.
+		// If both are numeric, compare as integers, otherwise as strings.
+
 		if as[i] != bs[j] {
-			return as[i] < bs[j]
+
+			// If the first element is *, it is always less.
+			if i == 0 && as[i] == "*" {
+				return true
+			}
+			if j == 0 && bs[j] == "*" {
+				return false
+			}
+
+			// If the elements are both numeric, compare as integers:
+			au, aerr := strconv.ParseUint(as[i], 10, 64)
+			bu, berr := strconv.ParseUint(bs[j], 10, 64)
+			if aerr == nil && berr == nil {
+				return au < bu
+			} else {
+				// otherwise, compare as strings:
+				return as[i] < bs[j]
+			}
 		}
 	}
 	// The min top elements were equal, so the shorter name is less.

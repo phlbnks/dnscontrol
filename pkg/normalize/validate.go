@@ -53,10 +53,13 @@ func validateRecordTypes(rec *models.RecordConfig, domain string, pTypes []strin
 		"A":                true,
 		"AAAA":             true,
 		"CNAME":            true,
+		"CAA":              true,
 		"IMPORT_TRANSFORM": false,
 		"MX":               true,
+		"SRV":              true,
 		"TXT":              true,
 		"NS":               true,
+		"PTR":              true,
 		"ALIAS":            false,
 	}
 	_, ok := validTypes[rec.Type]
@@ -95,7 +98,7 @@ func checkLabel(label string, rType string, domain string) error {
 	}
 
 	//underscores are warnings
-	if strings.ContainsRune(label, '_') {
+	if rType != "SRV" && strings.ContainsRune(label, '_') {
 		//unless it is in our exclusion list
 		ok := false
 		for _, ex := range expectedUnderscores {
@@ -141,15 +144,19 @@ func checkTargets(rec *models.RecordConfig, domain string) (errs []error) {
 		if label == "@" {
 			check(fmt.Errorf("cannot create NS record for bare domain. Use NAMESERVER instead"))
 		}
+	case "PTR":
+		check(checkTarget(target))
 	case "ALIAS":
 		check(checkTarget(target))
-	case "TXT", "IMPORT_TRANSFORM":
+	case "SRV":
+		check(checkTarget(target))
+	case "TXT", "IMPORT_TRANSFORM", "CAA":
 	default:
 		if rec.Metadata["orig_custom_type"] != "" {
 			//it is a valid custom type. We perform no validation on target
 			return
 		}
-		errs = append(errs, fmt.Errorf("Unimplemented record type (%v) domain=%v name=%v",
+		errs = append(errs, fmt.Errorf("checkTargets: Unimplemented record type (%v) domain=%v name=%v",
 			rec.Type, domain, rec.Name))
 	}
 	return
@@ -200,7 +207,7 @@ func importTransform(srcDomain, dstDomain *models.DomainConfig, transforms []tra
 			r := newRec()
 			r.Target = transformCNAME(r.Target, srcDomain.Name, dstDomain.Name)
 			dstDomain.Records = append(dstDomain.Records, r)
-		case "MX", "NS", "TXT":
+		case "MX", "NS", "SRV", "TXT", "CAA":
 			// Not imported.
 			continue
 		default:
@@ -270,6 +277,15 @@ func NormalizeAndValidateConfig(config *models.DNSConfig) (errs []error) {
 				rec.Target = dnsutil.AddOrigin(rec.Target, domain.Name+".")
 			} else if rec.Type == "A" || rec.Type == "AAAA" {
 				rec.Target = net.ParseIP(rec.Target).String()
+			} else if rec.Type == "PTR" {
+				var err error
+				if rec.Name, err = transform.PtrNameMagic(rec.Name, domain.Name); err != nil {
+					errs = append(errs, err)
+				}
+			} else if rec.Type == "CAA" {
+				if rec.CaaTag != "issue" && rec.CaaTag != "issuewild" && rec.CaaTag != "iodef" {
+					errs = append(errs, fmt.Errorf("CAA tag %s is invalid", rec.CaaTag))
+				}
 			}
 			// Populate FQDN:
 			rec.NameFQDN = dnsutil.AddOrigin(rec.Name, domain.Name)
@@ -309,9 +325,9 @@ func NormalizeAndValidateConfig(config *models.DNSConfig) (errs []error) {
 		errs = append(errs, checkCNAMEs(d)...)
 	}
 
-	//Check that if any aliases are used in a domain, every provider for that domain supports them
+	//Check that if any aliases / ptr / etc.. are used in a domain, every provider for that domain supports them
 	for _, d := range config.Domains {
-		err := checkALIASes(d, config.DNSProviders)
+		err := checkProviderCapabilities(d, config.DNSProviders)
 		if err != nil {
 			errs = append(errs, err)
 		}
@@ -338,24 +354,35 @@ func checkCNAMEs(dc *models.DomainConfig) (errs []error) {
 	return
 }
 
-func checkALIASes(dc *models.DomainConfig, pList []*models.DNSProviderConfig) error {
-	hasAlias := false
-	for _, r := range dc.Records {
-		if r.Type == "ALIAS" {
-			hasAlias = true
-			break
-		}
+func checkProviderCapabilities(dc *models.DomainConfig, pList []*models.DNSProviderConfig) error {
+	types := []struct {
+		rType string
+		cap   providers.Capability
+	}{
+		{"ALIAS", providers.CanUseAlias},
+		{"PTR", providers.CanUsePTR},
+		{"SRV", providers.CanUseSRV},
+		{"CAA", providers.CanUseCAA},
 	}
-	if !hasAlias {
-		return nil
-	}
-	for pName := range dc.DNSProviders {
-		for _, p := range pList {
-			if p.Name == pName {
-				if !providers.ProviderHasCabability(p.Type, providers.CanUseAlias) {
-					return fmt.Errorf("Domain %s uses ALIAS records, but DNS provider type %s does not support them", dc.Name, p.Type)
-				}
+	for _, ty := range types {
+		hasAny := false
+		for _, r := range dc.Records {
+			if r.Type == ty.rType {
+				hasAny = true
 				break
+			}
+		}
+		if !hasAny {
+			continue
+		}
+		for pName := range dc.DNSProviders {
+			for _, p := range pList {
+				if p.Name == pName {
+					if !providers.ProviderHasCabability(p.Type, ty.cap) {
+						return fmt.Errorf("Domain %s uses %s records, but DNS provider type %s does not support them", dc.Name, ty.rType, p.Type)
+					}
+					break
+				}
 			}
 		}
 	}
