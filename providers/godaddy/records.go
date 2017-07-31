@@ -2,6 +2,7 @@ package godaddy
 
 import(
   "fmt"
+
   "github.com/StackExchange/dnscontrol/models"
   "github.com/miekg/dns/dnsutil"
 )
@@ -27,19 +28,31 @@ type zoneResponse struct {
 type zoneResponses []zoneResponse
 
 // Structure of a GoDaddy DNS record
-type godaddyRecord struct {
+type dnsRecord struct {
   Type      string  `json:"type"`
   Name      string  `json:"name"`
   Data      string  `json:"data"`
-  Priority  uint16  `json:"priority"`
-  TTL       uint32  `json:"ttl"`
-  Service   string  `json:"service"`
-  Protocol  string  `json:"protocol"`
-  Port      int     `json:"port"`
-  Weight    int     `json:"weight"`
+  Priority  uint16  `json:"priority,omitempty"`
+  TTL       uint32  `json:"ttl,omitempty"`
+  Service   string  `json:"service,omitempty"`
+  Protocol  string  `json:"protocol,omitempty"`
+  Port      int     `json:"port,omitempty"`
+  Weight    int     `json:"weight,omitempty"`
 }
-type godaddyRecords []godaddyRecord
+type dnsRecords []dnsRecord
 
+// Generallized API response
+type basicResponse struct {
+  Code        string    `json:"code"`
+  Message     string    `json:"message"`
+  Name        string    `json:"name,omitempty"`
+  Fields      struct {
+    Code          string  `json:"code,omitempty"`
+    Message       string  `json:"message,omitempty"`
+    Path          string  `json:"path,omitempty"`
+    PathRelated   string  `json:"pathRelated,omitempty"`
+  } `json:"fields,omitempty"`
+}
 
 
 
@@ -60,7 +73,7 @@ func (c *GoDaddyApi) fetchDomain(domain string) (*zoneResponse, error) {
 func (c *GoDaddyApi) getRecordsForDomain(domain string) ([]*models.RecordConfig, error) {
   records := []*models.RecordConfig{}
 
-  resp := &godaddyRecords{}
+  resp := &dnsRecords{}
   url := fmt.Sprintf("%s/domains/%s/records", apiBase, domain)
   if err := c.get(url, resp); err != nil {
     return nil, err
@@ -92,4 +105,58 @@ func (c *GoDaddyApi) getRecordsForDomain(domain string) ([]*models.RecordConfig,
   }
 
   return records, nil
+}
+
+
+// Create a new DNS record
+func (c *GoDaddyApi) createRecord(rc *models.RecordConfig, domain string) error {
+  target := rc.Target
+  if rc.Type == "CNAME" || rc.Type == "MX" || rc.Type == "NS" {
+    if target[len(target)-1] == '.' {
+      target = target[:len(target)-1]
+    } else {
+      return fmt.Errorf("Unexpected. CNAME/MX/NS target did not end with dot.\n")
+    }
+  }
+  records := []dnsRecord{}
+  record := dnsRecord {
+    Type:   rc.Type,
+    Name:   dnsutil.TrimDomainName(rc.NameFQDN, domain),
+    Data:   target,
+    TTL:    rc.TTL,
+  }
+
+  if record.Name == "@" {
+    record.Name = ""
+  }
+  records = append(records, record)
+
+  endpoint := fmt.Sprintf("%s/domains/%s/records", apiBase, domain)
+
+  return c.patch(endpoint, records)
+}
+
+
+// Delete an existing DNS record
+func (c *GoDaddyApi) deleteRecord(rc *models.RecordConfig, domain string) error {
+  records := []dnsRecord{}
+  record := dnsRecord {
+    Type:   rc.Type,
+    Name:   dnsutil.TrimDomainName(rc.NameFQDN, domain),
+  }
+  records = append(records, record)
+
+  endpoint := fmt.Sprintf("%s/domains/%s/records", apiBase, domain)
+
+  return c.put(endpoint, records)
+}
+
+
+func (r *basicResponse) getErr() error {
+  if r == nil {
+    return nil
+  }
+
+fmt.Printf("getErr: %s\n", r)
+  return fmt.Errorf(r.Message)
 }

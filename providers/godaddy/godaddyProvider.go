@@ -72,7 +72,7 @@ func (c *GoDaddyApi) GetDomainCorrections(dc *models.DomainConfig) ([]*models.Co
   // }
 
   // Loop through expected records, making changes and discarding invalid records
-	expectedRecordSets := make([]godaddyRecord, 0, len(dc.Records))
+	expectedRecordSets := make([]dnsRecord, 0, len(dc.Records))
 	recordsToKeep := make([]*models.RecordConfig, 0, len(dc.Records))
 	for _, rec := range dc.Records {
 		// if rec.TTL < 300 {
@@ -89,7 +89,7 @@ func (c *GoDaddyApi) GetDomainCorrections(dc *models.DomainConfig) ([]*models.Co
 		// 	// log.Printf("WARNING: Gandi does not support changing apex NS records. %s will not be added.", rec.Target)
 		// 	continue
 		// }
-    rs := godaddyRecord {
+    rs := dnsRecord {
       Type: rec.Type,
       Name: rec.Name,
       Data: rec.Target,
@@ -113,20 +113,25 @@ func (c *GoDaddyApi) GetDomainCorrections(dc *models.DomainConfig) ([]*models.Co
 	dc.Records = recordsToKeep
 	differ := diff.New(dc)
 	fmt.Printf("\n\n")
+
 	_, create, del, mod := differ.IncrementalDiff(domainRecords)
+	corrections := []*models.Correction{}
 
 	for _, r := range create {
-		log.Printf("C: %s", r)
+		rec := r.Desired
+		log.Printf("C: %s\n", rec)
+		c := &models.Correction{Msg: r.String(), F: func() error { return c.createRecord(rec, dc.Name) }}
+		corrections = append(corrections, c)
 	}
-	log.Printf("")
 	for _, r := range del {
-		log.Printf("D: %s", r)
+		rec := r.Existing
+		log.Printf("D: %s\n", rec)
+		c := &models.Correction{Msg: r.String(), F: func() error { return c.deleteRecord(rec, dc.Name) }}
+		corrections = append(corrections, c)
 	}
-	log.Printf("")
 	for _, r := range mod {
-		log.Printf("M: %s", r)
+		log.Printf("M: %s\n", r)
 	}
-	log.Printf("")
 
-  return nil, nil
+  return corrections, nil
 }
