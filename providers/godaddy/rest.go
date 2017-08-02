@@ -6,7 +6,7 @@ import (
   "encoding/json"
   "fmt"
   "net/http"
-  // "net/http/httputil"
+  "net/http/httputil"
   "io/ioutil"
 )
 
@@ -39,11 +39,8 @@ func (c *GoDaddyApi) get(url string, target interface{}) error {
 
 // Make some type of update (POST, PATCH) request marshalling the given JSON data into the body of the request
 func (c *GoDaddyApi) update(method string, url string, data interface{}) error {
-  buf := &bytes.Buffer{}
-  enc := json.NewEncoder(buf)
-  if err := enc.Encode(data); err != nil {
-    return err
-  }
+  buf := new(bytes.Buffer)
+  json.NewEncoder(buf).Encode(data)
   req, err := http.NewRequest(method, url, buf)
   if err != nil {
     return err
@@ -51,14 +48,6 @@ func (c *GoDaddyApi) update(method string, url string, data interface{}) error {
   c.setHeaders(req)
   _, err = handleActionResponse(http.DefaultClient.Do(req))
   return err
-
-// dumpreq, err := httputil.DumpRequestOut(req, true)
-// fmt.Printf("REQUEST: %s\n", dumpreq)
-
-  // resp, err := http.DefaultClient.Do(req)
-
-// dumpres, err2 := httputil.DumpResponse(resp, true)
-// fmt.Printf("RESPONSE: %s\n\n\n\n", dumpres)
 }
 
 func (c *GoDaddyApi) patch(url string, data interface{}) error {
@@ -84,6 +73,10 @@ func handleActionResponse(resp *http.Response, err error) (id string, e error) {
     return "", err
   }
   defer resp.Body.Close()
+
+dumpres, _ := httputil.DumpResponse(resp, true)
+fmt.Printf("RESPONSE: %s\n\n\n\n", dumpres)
+
   result := &basicResponse{}
   decoder := json.NewDecoder(resp.Body)
   if err = decoder.Decode(result); err != nil {

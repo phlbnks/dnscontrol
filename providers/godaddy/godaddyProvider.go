@@ -94,7 +94,7 @@ func (c *GoDaddyApi) GetDomainCorrections(dc *models.DomainConfig) ([]*models.Co
       Name: rec.Name,
       Data: rec.Target,
       TTL: rec.TTL,
-      Priority: rec.Priority,
+      MxPreference: rec.MxPreference,
     }
 
 		expectedRecordSets = append(expectedRecordSets, rs)
