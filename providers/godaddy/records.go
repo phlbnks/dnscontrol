@@ -114,37 +114,24 @@ func (c *GoDaddyApi) getRecordsForDomain(domain string) ([]*models.RecordConfig,
 }
 
 
-// Create a new DNS record
-func (c *GoDaddyApi) createRecord(rc *models.RecordConfig, domain string) error {
-  target := rc.Target
-  if rc.Type == "CNAME" || rc.Type == "MX" || rc.Type == "NS" {
-    if target[len(target)-1] == '.' {
-      target = target[:len(target)-1]
-    } else {
-      return fmt.Errorf("Unexpected. CNAME/MX/NS target did not end with dot.\n")
-    }
-  }
-  records := []dnsRecord{}  // GoDaddy requires an array, even if just for one record
-  record := dnsRecord {
-    Type:   rc.Type,
-    Name:   dnsutil.TrimDomainName(rc.NameFQDN, domain),
-    Data:   target,
-    TTL:    rc.TTL,
-  }
-
-  if record.Name == "@" {
-    record.Name = ""
-  }
-  records = append(records, record)
-
-  endpoint := fmt.Sprintf("%s/domains/%s/records", apiBase, domain)
-
-  return c.patch(endpoint, records)
+// Modify an existing DNS record
+func (c *GoDaddyApi) modifyRecord(rc *models.RecordConfig, domain string) error {
+  return c.createOrModifyRecord("modify", rc, domain)
 }
 
+// Create a new DNS record
+func (c *GoDaddyApi) createRecord(rc *models.RecordConfig, domain string) error {
+  return c.createOrModifyRecord("create", rc, domain)
+}
 
 // Delete an existing DNS record
 func (c *GoDaddyApi) deleteRecord(rc *models.RecordConfig, domain string) error {
+  // GoDaddy doesn't have a "delete" method.  Instead you have to get the full list of existing records
+  // and remove the ones you want to delete.
+
+  // allRecords := c.getRecordsForDomain(domain)
+  // fmt.Printf("ALLRECORDS: %+v", allRecords)
+
   records := []dnsRecord{}  // GoDaddy requires an array, even if just for one record
   record := dnsRecord {
     Data: " ",
@@ -155,14 +142,16 @@ func (c *GoDaddyApi) deleteRecord(rc *models.RecordConfig, domain string) error 
   return c.put(endpoint, records)
 }
 
-// Modify an existing DNS record
-func (c *GoDaddyApi) modifyRecord(rc *models.RecordConfig, domain string) error {
+
+
+// Generic function to deal with new or existing records
+func (c *GoDaddyApi) createOrModifyRecord(method string, rc *models.RecordConfig, domain string) error {
   target := rc.Target
-  if rc.Type == "CNAME" || rc.Type == "MX" || rc.Type == "NS" {
+  if rc.Type == "CNAME" || rc.Type == "MX" {
     if target[len(target)-1] == '.' {
       target = target[:len(target)-1]
     } else {
-      return fmt.Errorf("Unexpected. CNAME/MX/NS target did not end with dot.\n")
+      return fmt.Errorf("Unexpected. CNAME/MX target did not end with dot.\n")
     }
   }
   records := []dnsRecord{}  // GoDaddy requires an array, even if just for one record
@@ -178,15 +167,26 @@ func (c *GoDaddyApi) modifyRecord(rc *models.RecordConfig, domain string) error 
   }
   records = append(records, record)
 
-  endpoint := fmt.Sprintf("%s/domains/%s/records/%s/%s", apiBase, domain, rc.Type, dnsutil.TrimDomainName(rc.NameFQDN, domain))
-  return c.put(endpoint, records)
+  switch method {
+    case "create":
+      endpoint := fmt.Sprintf("%s/domains/%s/records", apiBase, domain)
+      return c.patch(endpoint, records)
+
+    case "modify":
+      endpoint := fmt.Sprintf("%s/domains/%s/records/%s/%s", apiBase, domain, rc.Type, dnsutil.TrimDomainName(rc.NameFQDN, domain))
+      return c.put(endpoint, records)
+
+    default:
+      return fmt.Errorf("Unknown operation: %s", method)
+  }
 }
+
 
 func (r *basicResponse) getErr() error {
   if r == nil {
     return nil
   }
 
-fmt.Printf("getErr: %s\n", r)
+  fmt.Printf("getErr: %s\n", r)
   return fmt.Errorf(r.Message)
 }

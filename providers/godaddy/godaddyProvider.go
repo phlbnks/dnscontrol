@@ -61,34 +61,12 @@ func (c *GoDaddyApi) GetDomainCorrections(dc *models.DomainConfig) ([]*models.Co
   if err != nil {
   	return nil, fmt.Errorf("Couldn't get DNS records for GoDaddy domain '%s': %s", dc.Name, err)
   }
-  // fmt.Printf("\nDEBUG: Domain Records\n\tType\tName\tTarget\t\t\t\tFQDN\n")
-  // for _, rec := range domainRecords {
-  // 	fmt.Printf("DEBUG: %s \t %s \t %s \t %s \t %d\n", rec.Type, rec.Name, rec.Target, rec.NameFQDN, rec.TTL)
-  // }
 
-  // fmt.Printf("\nDEBUG: DC Records\n\tType\tName\tTarget\t\t\t\tFQDN\n")
-  // for _, rec := range dc.Records {
-  // 	fmt.Printf("DEBUG: %s \t %s \t %s \t %s \t %d\n", rec.Type, rec.Name, rec.Target, rec.NameFQDN, rec.TTL)
-  // }
-
-  // Loop through expected records, making changes and discarding invalid records
 	expectedRecordSets := make([]dnsRecord, 0, len(dc.Records))
 	recordsToKeep := make([]*models.RecordConfig, 0, len(dc.Records))
+
+  // Loop through expected records, making changes and discarding invalid records
 	for _, rec := range dc.Records {
-		// if rec.TTL < 300 {
-		// 	log.Printf("WARNING: Gandi does not support ttls < 300. %s will not be set to %d.", rec.NameFQDN, rec.TTL)
-		// 	rec.TTL = 300
-		// }
-		// if rec.TTL > 2592000 {
-		// 	return nil, fmt.Errorf("ERROR: Gandi does not support TTLs > 30 days (TTL=%d)", rec.TTL)
-		// }
-		// if rec.Type == "TXT" {
-		// 	rec.Target = "\"" + rec.Target + "\"" // FIXME(tlim): Should do proper quoting.
-		// }
-		// if rec.Type == "NS" && rec.Name == "@" {
-		// 	// log.Printf("WARNING: Gandi does not support changing apex NS records. %s will not be added.", rec.Target)
-		// 	continue
-		// }
     rs := dnsRecord {
       Type: rec.Type,
       Name: rec.Name,
@@ -100,15 +78,6 @@ func (c *GoDaddyApi) GetDomainCorrections(dc *models.DomainConfig) ([]*models.Co
 		expectedRecordSets = append(expectedRecordSets, rs)
 		recordsToKeep = append(recordsToKeep, rec)
 	}
-
-  // fmt.Printf("\nDEBUG: Expected Records\n")
-  // for _, rec := range expectedRecordSets {
-  // 	fmt.Printf("DEBUG: %s \t %s \t %#v \t %d\n", rec.Type, rec.Name, rec.Data, rec.TTL)
-  // }
-  // fmt.Printf("\nDEBUG: Records To Keep\n\tType\tName\tTarget\t\t\t\tFQDN\n")
-  // for _, rec := range recordsToKeep {
-  // 	fmt.Printf("DEBUG: %s \t %s \t %s \t %s \t %d\n", rec.Type, rec.Name, rec.Target, rec.NameFQDN, rec.TTL)
-  // }
 
 	dc.Records = recordsToKeep
 	differ := diff.New(dc)
