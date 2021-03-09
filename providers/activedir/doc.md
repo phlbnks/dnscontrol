@@ -1,6 +1,6 @@
-### ActiveDirectory
+### Active Directory
 
-This provider updates a DNS Zone in an ActiveDirectory Integrated Zone.
+This provider updates a DNS Zone in an Active Directory Integrated Zone.
 
 When run on Windows, AD is updated directly. The code generates
 PowerShell commands, executes them, and checks the results.
@@ -37,7 +37,7 @@ D('ds.stackexchange.com', REG_NONE,
 )
 
 
-    //records handled by another provider...
+    // records handled by another provider...
 );
 ```
 

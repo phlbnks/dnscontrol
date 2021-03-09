@@ -5,26 +5,46 @@ import (
 
 	"fmt"
 
-	"github.com/StackExchange/dnscontrol/models"
+	"github.com/StackExchange/dnscontrol/v3/models"
+	"github.com/StackExchange/dnscontrol/v3/providers"
 )
 
 func TestCheckLabel(t *testing.T) {
 	var tests = []struct {
-		experiment string
-		isError    bool
+		label       string
+		rType       string
+		target      string
+		isError     bool
+		hasSkipMeta bool
 	}{
-		{"@", false},
-		{"foo", false},
-		{"foo.bar", false},
-		{"foo.", true},
-		{"foo.bar.", true},
-		{"foo_bar", true},
-		{"_domainkey", false},
+		{"@", "A", "zap", false, false},
+		{"foo.bar", "A", "zap", false, false},
+		{"_foo", "A", "zap", false, false},
+		{"_foo", "SRV", "zap", false, false},
+		{"_foo", "TLSA", "zap", false, false},
+		{"_foo", "TXT", "zap", false, false},
+		{"_y2", "CNAME", "foo", false, false},
+		{"s1._domainkey", "CNAME", "foo", false, false},
+		{"_y3", "CNAME", "asfljds.acm-validations.aws.", false, false},
+		{"test.foo.tld", "A", "zap", true, false},
+		{"test.foo.tld", "A", "zap", false, true},
 	}
 
-	for _, test := range tests {
-		err := checkLabel(test.experiment, "A", "foo.com")
-		checkError(t, err, test.isError, test.experiment)
+	for i, test := range tests {
+		t.Run(fmt.Sprintf("%s %s", test.label, test.rType), func(t *testing.T) {
+			meta := map[string]string{}
+			if test.hasSkipMeta {
+				meta["skip_fqdn_check"] = "true"
+			}
+			err := checkLabel(test.label, test.rType, test.target, "foo.tld", meta)
+			if err != nil && !test.isError {
+				t.Errorf("%02d: Expected no error but got %s", i, err)
+			}
+			if err == nil && test.isError {
+				t.Errorf("%02d: Expected error but got none", i)
+			}
+		})
+
 	}
 }
 
@@ -97,13 +117,15 @@ func Test_transform_cname(t *testing.T) {
 }
 
 func TestNSAtRoot(t *testing.T) {
-	//do not allow ns records for @
-	rec := &models.RecordConfig{Name: "test", Type: "NS", Target: "ns1.name.com."}
+	// do not allow ns records for @
+	rec := &models.RecordConfig{Type: "NS"}
+	rec.SetLabel("test", "foo.com")
+	rec.SetTarget("ns1.name.com.")
 	errs := checkTargets(rec, "foo.com")
 	if len(errs) > 0 {
 		t.Error("Expect no error with ns record on subdomain")
 	}
-	rec.Name = "@"
+	rec.SetLabel("@", "foo.com")
 	errs = checkTargets(rec, "foo.com")
 	if len(errs) != 1 {
 		t.Error("Expect error with ns record on @")
@@ -123,7 +145,7 @@ func TestTransforms(t *testing.T) {
 	for i, test := range tests {
 		dc := &models.DomainConfig{
 			Records: []*models.RecordConfig{
-				{Type: "A", Target: test.givenIP, Metadata: map[string]string{"transform": transform}},
+				makeRC("f", "example.tld", test.givenIP, models.RecordConfig{Type: "A", Metadata: map[string]string{"transform": transform}}),
 			},
 		}
 		err := applyRecordTransforms(dc)
@@ -136,8 +158,8 @@ func TestTransforms(t *testing.T) {
 			continue
 		}
 		for r, rec := range dc.Records {
-			if rec.Target != test.expectedRecords[r] {
-				t.Errorf("test %d at index %d: records don't match. Expect %s but found %s.", i, r, test.expectedRecords[r], rec.Target)
+			if rec.GetTargetField() != test.expectedRecords[r] {
+				t.Errorf("test %d at index %d: records don't match. Expect %s but found %s.", i, r, test.expectedRecords[r], rec.GetTargetField())
 				continue
 			}
 		}
@@ -145,7 +167,9 @@ func TestTransforms(t *testing.T) {
 }
 
 func TestCNAMEMutex(t *testing.T) {
-	var recA = &models.RecordConfig{Type: "CNAME", Name: "foo", NameFQDN: "foo.example.com", Target: "example.com."}
+	var recA = &models.RecordConfig{Type: "CNAME"}
+	recA.SetLabel("foo", "foo.example.com")
+	recA.SetTarget("example.com.")
 	tests := []struct {
 		rType string
 		name  string
@@ -158,7 +182,9 @@ func TestCNAMEMutex(t *testing.T) {
 	}
 	for _, tst := range tests {
 		t.Run(fmt.Sprintf("%s %s", tst.rType, tst.name), func(t *testing.T) {
-			var recB = &models.RecordConfig{Type: tst.rType, Name: tst.name, NameFQDN: tst.name + ".example.com", Target: "example2.com."}
+			var recB = &models.RecordConfig{Type: tst.rType}
+			recB.SetLabel(tst.name, "example.com")
+			recB.SetTarget("example2.com.")
 			dc := &models.DomainConfig{
 				Name:    "example.com",
 				Records: []*models.RecordConfig{recA, recB},
@@ -178,16 +204,164 @@ func TestCAAValidation(t *testing.T) {
 	config := &models.DNSConfig{
 		Domains: []*models.DomainConfig{
 			{
-				Name:      "example.com",
-				Registrar: "BIND",
+				Name:          "example.com",
+				RegistrarName: "BIND",
 				Records: []*models.RecordConfig{
-					{Name: "@", Type: "CAA", CaaTag: "invalid", Target: "example.com"},
+					makeRC("@", "example.com", "example.com", models.RecordConfig{Type: "CAA", CaaTag: "invalid"}),
 				},
 			},
 		},
 	}
-	errs := NormalizeAndValidateConfig(config)
+	errs := ValidateAndNormalizeConfig(config)
 	if len(errs) != 1 {
 		t.Error("Expect error on invalid CAA but got none")
 	}
+}
+
+func TestCheckDuplicates(t *testing.T) {
+	records := []*models.RecordConfig{
+		// The only difference is the target:
+		makeRC("www", "example.com", "4.4.4.4", models.RecordConfig{Type: "A"}),
+		makeRC("www", "example.com", "5.5.5.5", models.RecordConfig{Type: "A"}),
+		// The only difference is the rType:
+		makeRC("aaa", "example.com", "uniquestring.com.", models.RecordConfig{Type: "NS"}),
+		makeRC("aaa", "example.com", "uniquestring.com.", models.RecordConfig{Type: "PTR"}),
+		// The only difference is the TTL.
+		makeRC("zzz", "example.com", "4.4.4.4", models.RecordConfig{Type: "A", TTL: 111}),
+		makeRC("zzz", "example.com", "4.4.4.4", models.RecordConfig{Type: "A", TTL: 222}),
+		// Three records each with a different target.
+		makeRC("@", "example.com", "ns1.foo.com.", models.RecordConfig{Type: "NS"}),
+		makeRC("@", "example.com", "ns2.foo.com.", models.RecordConfig{Type: "NS"}),
+		makeRC("@", "example.com", "ns3.foo.com.", models.RecordConfig{Type: "NS"}),
+	}
+	errs := checkDuplicates(records)
+	if len(errs) != 0 {
+		t.Errorf("Expect duplicate NOT found but found %q", errs)
+	}
+}
+
+func TestCheckDuplicates_dup_a(t *testing.T) {
+	records := []*models.RecordConfig{
+		// A records that are exact dupliates.
+		makeRC("@", "example.com", "1.1.1.1", models.RecordConfig{Type: "A"}),
+		makeRC("@", "example.com", "1.1.1.1", models.RecordConfig{Type: "A"}),
+	}
+	errs := checkDuplicates(records)
+	if len(errs) == 0 {
+		t.Error("Expect duplicate found but found none")
+	}
+}
+
+func TestCheckDuplicates_dup_ns(t *testing.T) {
+	records := []*models.RecordConfig{
+		// Three records, the last 2 are duplicates.
+		// NB: This is a common issue.
+		makeRC("@", "example.com", "ns1.foo.com.", models.RecordConfig{Type: "NS"}),
+		makeRC("@", "example.com", "ns2.foo.com.", models.RecordConfig{Type: "NS"}),
+		makeRC("@", "example.com", "ns2.foo.com.", models.RecordConfig{Type: "NS"}),
+	}
+	errs := checkDuplicates(records)
+	if len(errs) == 0 {
+		t.Error("Expect duplicate found but found none")
+	}
+}
+
+func TestTLSAValidation(t *testing.T) {
+	config := &models.DNSConfig{
+		Domains: []*models.DomainConfig{
+			{
+				Name:          "_443._tcp.example.com",
+				RegistrarName: "BIND",
+				Records: []*models.RecordConfig{
+					makeRC("_443._tcp", "_443._tcp.example.com", "abcdef0", models.RecordConfig{
+						Type: "TLSA", TlsaUsage: 4, TlsaSelector: 1, TlsaMatchingType: 1}),
+				},
+			},
+		},
+	}
+	errs := ValidateAndNormalizeConfig(config)
+	if len(errs) != 1 {
+		t.Error("Expect error on invalid TLSA but got none")
+	}
+}
+
+const (
+	ProviderNoDS        = "NO_DS_SUPPORT"
+	ProviderFullDS      = "FULL_DS_SUPPORT"
+	ProviderChildDSOnly = "CHILD_DS_SUPPORT"
+	ProviderBothDSCaps  = "BOTH_DS_CAPABILITIES"
+)
+
+func init() {
+	providers.RegisterDomainServiceProviderType(ProviderNoDS, providers.DspFuncs{}, providers.DocumentationNotes{})
+	providers.RegisterDomainServiceProviderType(ProviderFullDS, providers.DspFuncs{}, providers.DocumentationNotes{
+		providers.CanUseDS: providers.Can(),
+	})
+	providers.RegisterDomainServiceProviderType(ProviderChildDSOnly, providers.DspFuncs{}, providers.DocumentationNotes{
+		providers.CanUseDSForChildren: providers.Can(),
+	})
+	providers.RegisterDomainServiceProviderType(ProviderBothDSCaps, providers.DspFuncs{}, providers.DocumentationNotes{
+		providers.CanUseDS:            providers.Can(),
+		providers.CanUseDSForChildren: providers.Can(),
+	})
+}
+
+func Test_DSChecks(t *testing.T) {
+	t.Run("no DS support", func(t *testing.T) {
+		err := checkProviderDS(ProviderNoDS, nil)
+		if err == nil {
+			t.Errorf("Provider %s implements no DS capabilities, so should have failed the check", ProviderNoDS)
+		}
+	})
+
+	t.Run("full DS support", func(t *testing.T) {
+		apexDS := models.RecordConfig{Type: "DS"}
+		apexDS.SetLabel("@", "example.com")
+
+		childDS := models.RecordConfig{Type: "DS"}
+		childDS.SetLabel("child", "example.com")
+
+		records := models.Records{&apexDS, &childDS}
+
+		// check permutations of ProviderCanDS and having both DS caps
+		for _, pType := range []string{ProviderFullDS, ProviderBothDSCaps} {
+			err := checkProviderDS(pType, records)
+			if err != nil {
+				t.Errorf("Provider %s implements full DS capabilities and should process the provided records", ProviderFullDS)
+			}
+		}
+	})
+
+	t.Run("child DS support only", func(t *testing.T) {
+		apexDS := models.RecordConfig{Type: "DS"}
+		apexDS.SetLabel("@", "example.com")
+
+		childDS := models.RecordConfig{Type: "DS"}
+		childDS.SetLabel("child", "example.com")
+
+		// this record is included at the apex to check the Type of the
+		// recordset is verified to only inspect records with type == DS
+		apexA := models.RecordConfig{Type: "A"}
+		apexA.SetLabel("@", "example.com")
+
+		t.Run("accepts when child DS records only", func(t *testing.T) {
+			records := models.Records{&childDS, &apexA}
+			err := checkProviderDS(ProviderChildDSOnly, records)
+			if err != nil {
+				t.Errorf("Provider %s implements child DS support so the provided records should be accepted",
+					ProviderChildDSOnly,
+				)
+			}
+		})
+
+		t.Run("fails with apex and child DS records", func(t *testing.T) {
+			records := models.Records{&apexDS, &childDS, &apexA}
+			err := checkProviderDS(ProviderChildDSOnly, records)
+			if err == nil {
+				t.Errorf("Provider %s does not implement DS support at the zone apex, so should reject provided records",
+					ProviderChildDSOnly,
+				)
+			}
+		})
+	})
 }

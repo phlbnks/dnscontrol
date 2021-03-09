@@ -6,7 +6,8 @@ import (
 	"strings"
 )
 
-type IpConversion struct {
+// IPConversion describes an IP conversion.
+type IPConversion struct {
 	Low, High net.IP
 	NewBases  []net.IP
 	NewIPs    []net.IP
@@ -21,6 +22,7 @@ func ipToUint(i net.IP) (uint32, error) {
 	return r, nil
 }
 
+// UintToIP convert a 32-bit into into a net.IP.
 func UintToIP(u uint32) net.IP {
 	return net.IPv4(
 		byte((u>>24)&255),
@@ -30,19 +32,19 @@ func UintToIP(u uint32) net.IP {
 }
 
 // DecodeTransformTable turns a string-encoded table into a list of conversions.
-func DecodeTransformTable(transforms string) ([]IpConversion, error) {
-	result := []IpConversion{}
+func DecodeTransformTable(transforms string) ([]IPConversion, error) {
+	result := []IPConversion{}
 	rows := strings.Split(transforms, ";")
 	for ri, row := range rows {
 		items := strings.Split(row, "~")
 		if len(items) != 4 {
-			return nil, fmt.Errorf("transform_table rows should have 4 elements. (%v) found in row (%v) of %#v\n", len(items), ri, transforms)
+			return nil, fmt.Errorf("transform_table rows should have 4 elements. (%v) found in row (%v) of %#v", len(items), ri, transforms)
 		}
 		for i, item := range items {
 			items[i] = strings.TrimSpace(item)
 		}
 
-		con := IpConversion{
+		con := IPConversion{
 			Low:  net.ParseIP(items[0]),
 			High: net.ParseIP(items[1]),
 		}
@@ -72,7 +74,7 @@ func DecodeTransformTable(transforms string) ([]IpConversion, error) {
 		low, _ := ipToUint(con.Low)
 		high, _ := ipToUint(con.High)
 		if low > high {
-			return nil, fmt.Errorf("transform_table Low should be less than High. row (%v) %v>%v (%v)\n", ri, con.Low, con.High, transforms)
+			return nil, fmt.Errorf("transform_table Low should be less than High. row (%v) %v>%v (%v)", ri, con.Low, con.High, transforms)
 		}
 		if len(con.NewBases) > 0 && len(con.NewIPs) > 0 {
 			return nil, fmt.Errorf("transform_table_rows should only specify one of NewBases or NewIPs, Not both")
@@ -83,20 +85,20 @@ func DecodeTransformTable(transforms string) ([]IpConversion, error) {
 	return result, nil
 }
 
-// TransformIP transforms a single ip address. If the transform results in multiple new targets, an error will be returned.
-func TransformIP(address net.IP, transforms []IpConversion) (net.IP, error) {
-	ips, err := TransformIPToList(address, transforms)
+// IP transforms a single ip address. If the transform results in multiple new targets, an error will be returned.
+func IP(address net.IP, transforms []IPConversion) (net.IP, error) {
+	ips, err := IPToList(address, transforms)
 	if err != nil {
 		return nil, err
 	}
 	if len(ips) != 1 {
-		return nil, fmt.Errorf("Expect exactly one ip for TransformIP result. Got: %s", ips)
+		return nil, fmt.Errorf("exactly one IP expected. Got: %s", ips)
 	}
 	return ips[0], err
 }
 
-// TransformIPToList manipulates an net.IP based on a list of IpConversions. It can potentially expand one ip address into multiple addresses.
-func TransformIPToList(address net.IP, transforms []IpConversion) ([]net.IP, error) {
+// IPToList manipulates an net.IP based on a list of IPConversions. It can potentially expand one ip address into multiple addresses.
+func IPToList(address net.IP, transforms []IPConversion) ([]net.IP, error) {
 	thisIP, err := ipToUint(address)
 	if err != nil {
 		return nil, err

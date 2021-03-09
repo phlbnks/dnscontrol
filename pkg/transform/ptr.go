@@ -6,10 +6,9 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-
-	"github.com/pkg/errors"
 )
 
+// PtrNameMagic implements the PTR magic.
 func PtrNameMagic(name, domain string) (string, error) {
 	// Implement the PTR name magic.  If the name is a properly formed
 	// IPv4 or IPv6 address, we replace it with the right string (i.e
@@ -20,9 +19,8 @@ func PtrNameMagic(name, domain string) (string, error) {
 	if strings.HasSuffix(name, ".in-addr.arpa.") || strings.HasSuffix(name, ".ip6.arpa.") {
 		if strings.HasSuffix(name, "."+domain+".") {
 			return strings.TrimSuffix(name, "."+domain+"."), nil
-		} else {
-			return name, errors.Errorf("PTR record %v in wrong domain (%v)", name, domain)
 		}
+		return name, fmt.Errorf("PTR record %v in wrong domain (%v)", name, domain)
 	}
 
 	// If the domain is .arpa, we do magic.
@@ -57,7 +55,7 @@ func ipv4magic(name, domain string) (string, error) {
 		return strings.SplitN(rev, ".", 2)[0], nil
 	}
 
-	return "", errors.Errorf("PTR record %v in wrong IPv4 domain (%v)", name, domain)
+	return "", fmt.Errorf("PTR record %v in wrong IPv4 domain (%v)", name, domain)
 }
 
 var isRfc2317Format1 = regexp.MustCompile(`(\d{1,3})/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.in-addr\.arpa$`)
@@ -112,7 +110,7 @@ func ipv6magic(name, domain string) (string, error) {
 		return name, err
 	}
 	if !strings.HasSuffix(rev, "."+domain) {
-		err = errors.Errorf("PTR record %v in wrong IPv6 domain (%v)", name, domain)
+		err = fmt.Errorf("PTR record %v in wrong IPv6 domain (%v)", name, domain)
 	}
 	return strings.TrimSuffix(rev, "."+domain), err
 }

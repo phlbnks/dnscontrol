@@ -5,135 +5,125 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/StackExchange/dnscontrol/models"
+	"github.com/StackExchange/dnscontrol/v3/models"
 )
 
-//Registrar is an interface for a domain registrar. It can return a list of needed corrections to be applied in the future.
+// Registrar is an interface for a domain registrar. It can return a list of needed corrections to be applied in the future. Implement this only if the provider is a "registrar" (i.e. can update the NS records of the parent to a domain).
 type Registrar interface {
-	GetRegistrarCorrections(dc *models.DomainConfig) ([]*models.Correction, error)
+	models.Registrar
 }
 
-//DNSServiceProvider is able to generate a set of corrections that need to be made to correct records for a domain
+// DNSServiceProvider is able to generate a set of corrections that need to be made to correct records for a domain. Implement this only if the provider is a DNS Service Provider (can update records in a DNS zone).
 type DNSServiceProvider interface {
-	GetNameservers(domain string) ([]*models.Nameserver, error)
-	GetDomainCorrections(dc *models.DomainConfig) ([]*models.Correction, error)
+	models.DNSProvider
 }
 
-//DomainCreator should be implemented by providers that have the ability to add domains to an account. the create-domains command
-//can be run to ensure all domains are present before running preview/push
+// DomainCreator should be implemented by providers that have the ability to add domains to an account. the create-domains command
+// can be run to ensure all domains are present before running preview/push.  Implement this only if the provider supoprts the `dnscontrol create-domain` command.
 type DomainCreator interface {
 	EnsureDomainExists(domain string) error
 }
 
-//RegistrarInitializer is a function to create a registrar. Function will be passed the unprocessed json payload from the configuration file for the given provider.
+// ZoneLister should be implemented by providers that have the
+// ability to list the zones they manage. This facilitates using the
+// "get-zones" command for "all" zones.
+type ZoneLister interface {
+	ListZones() ([]string, error)
+}
+
+// RegistrarInitializer is a function to create a registrar. Function will be passed the unprocessed json payload from the configuration file for the given provider.
 type RegistrarInitializer func(map[string]string) (Registrar, error)
 
-var registrarTypes = map[string]RegistrarInitializer{}
+// RegistrarTypes stores initializer for each registrar.
+var RegistrarTypes = map[string]RegistrarInitializer{}
 
-//DspInitializer is a function to create a DNS service provider. Function will be passed the unprocessed json payload from the configuration file for the given provider.
+// DspInitializer is a function to create a DNS service provider. Function will be passed the unprocessed json payload from the configuration file for the given provider.
 type DspInitializer func(map[string]string, json.RawMessage) (DNSServiceProvider, error)
 
-var dspTypes = map[string]DspInitializer{}
-var dspCapabilities = map[string]Capability{}
+// RecordAuditor is a function that verifies that all the records
+// are supportable by this provider. It returns an error related to
+// the first record that this provider can not support.
+type RecordAuditor func([]*models.RecordConfig) error
 
-//Capability is a bitmasked set of "features" that a provider supports. Only use constants from this package.
-type Capability uint32
-
-const (
-	// CanUseAlias indicates the provider support ALIAS records (or flattened CNAMES). Up to the provider to translate them to the appropriate record type.
-	// If you add something to this list, you probably want to add it to pkg/normalize/validate.go checkProviderCapabilities() or somewhere near there.
-	CanUseAlias Capability = 1 << iota
-	// CanUsePTR indicates the provider can handle PTR records
-	CanUsePTR
-	// CanUseSRV indicates the provider can handle SRV records
-	CanUseSRV
-	// CanUseCAA indicates the provider can handle CAA records
-	CanUseCAA
-)
-
-func ProviderHasCabability(pType string, cap Capability) bool {
-	return dspCapabilities[pType]&cap != 0
+// DspFuncs lists functions registered with a provider.
+type DspFuncs struct {
+	Initializer          DspInitializer
+	RecordAuditor RecordAuditor
 }
 
-//RegisterRegistrarType adds a registrar type to the registry by providing a suitable initialization function.
-func RegisterRegistrarType(name string, init RegistrarInitializer) {
-	if _, ok := registrarTypes[name]; ok {
+// DNSProviderTypes stores initializer for each DSP.
+var DNSProviderTypes = map[string]DspFuncs{}
+
+// RegisterRegistrarType adds a registrar type to the registry by providing a suitable initialization function.
+func RegisterRegistrarType(name string, init RegistrarInitializer, pm ...ProviderMetadata) {
+	if _, ok := RegistrarTypes[name]; ok {
 		log.Fatalf("Cannot register registrar type %s multiple times", name)
 	}
-	registrarTypes[name] = init
+	RegistrarTypes[name] = init
+	unwrapProviderCapabilities(name, pm)
 }
 
-//RegisterDomainServiceProviderType adds a dsp to the registry with the given initialization function.
-func RegisterDomainServiceProviderType(name string, init DspInitializer, caps ...Capability) {
-	if _, ok := dspTypes[name]; ok {
+// RegisterDomainServiceProviderType adds a dsp to the registry with the given initialization function.
+func RegisterDomainServiceProviderType(name string, fns DspFuncs, pm ...ProviderMetadata) {
+	if _, ok := DNSProviderTypes[name]; ok {
 		log.Fatalf("Cannot register registrar type %s multiple times", name)
 	}
-	var abilities Capability
-	for _, c := range caps {
-		abilities |= c
-	}
-	dspTypes[name] = init
-	dspCapabilities[name] = abilities
+	DNSProviderTypes[name] = fns
+	unwrapProviderCapabilities(name, pm)
 }
 
-func createRegistrar(rType string, config map[string]string) (Registrar, error) {
-	initer, ok := registrarTypes[rType]
+// CreateRegistrar initializes a registrar instance from given credentials.
+func CreateRegistrar(rType string, config map[string]string) (Registrar, error) {
+	initer, ok := RegistrarTypes[rType]
 	if !ok {
-		return nil, fmt.Errorf("Registrar type %s not declared.", rType)
+		return nil, fmt.Errorf("registrar type %s not declared", rType)
 	}
 	return initer(config)
 }
 
+// CreateDNSProvider initializes a dns provider instance from given credentials.
 func CreateDNSProvider(dType string, config map[string]string, meta json.RawMessage) (DNSServiceProvider, error) {
-	initer, ok := dspTypes[dType]
+	p, ok := DNSProviderTypes[dType]
 	if !ok {
 		return nil, fmt.Errorf("DSP type %s not declared", dType)
 	}
-	return initer(config, meta)
+	return p.Initializer(config, meta)
 }
 
-//CreateRegistrars will load all registrars from the dns config, and create instances of the correct type using data from
-//the provider config to load relevant keys and options.
-func CreateRegistrars(d *models.DNSConfig, providerConfigs map[string]map[string]string) (map[string]Registrar, error) {
-	regs := map[string]Registrar{}
-	for _, reg := range d.Registrars {
-		rawMsg, ok := providerConfigs[reg.Name]
-		if !ok && reg.Type != "NONE" {
-			return nil, fmt.Errorf("Registrar %s not listed in creds.json file.", reg.Name)
-		}
-		registrar, err := createRegistrar(reg.Type, rawMsg)
-		if err != nil {
-			return nil, err
-		}
-		regs[reg.Name] = registrar
+// AuditRecords calls the RecordAudit function for a provider.
+func AuditRecords(dType string, rcs models.Records) error {
+	p, ok := DNSProviderTypes[dType]
+	if !ok {
+		return fmt.Errorf("DSP type %s not declared", dType)
 	}
-	return regs, nil
-}
-
-func CreateDsps(d *models.DNSConfig, providerConfigs map[string]map[string]string) (map[string]DNSServiceProvider, error) {
-	dsps := map[string]DNSServiceProvider{}
-	for _, dsp := range d.DNSProviders {
-		vals := providerConfigs[dsp.Name]
-		provider, err := CreateDNSProvider(dsp.Type, vals, dsp.Metadata)
-		if err != nil {
-			return nil, err
-		}
-		dsps[dsp.Name] = provider
+	if p.RecordAuditor == nil {
+		return fmt.Errorf("DSP type %s has no RecordAuditor", dType)
 	}
-	return dsps, nil
+	return p.RecordAuditor(rcs)
 }
 
 // None is a basic provider type that does absolutely nothing. Can be useful as a placeholder for third parties or unimplemented providers.
 type None struct{}
 
+// GetRegistrarCorrections returns corrections to update registrars.
 func (n None) GetRegistrarCorrections(dc *models.DomainConfig) ([]*models.Correction, error) {
 	return nil, nil
 }
 
+// GetNameservers returns the current nameservers for a domain.
 func (n None) GetNameservers(string) ([]*models.Nameserver, error) {
 	return nil, nil
 }
 
+// GetZoneRecords gets the records of a zone and returns them in RecordConfig format.
+func (n None) GetZoneRecords(domain string) (models.Records, error) {
+	return nil, fmt.Errorf("not implemented")
+	// This enables the get-zones subcommand.
+	// Implement this by extracting the code from GetDomainCorrections into
+	// a single function.  For most providers this should be relatively easy.
+}
+
+// GetDomainCorrections returns corrections to update a domain.
 func (n None) GetDomainCorrections(dc *models.DomainConfig) ([]*models.Correction, error) {
 	return nil, nil
 }
@@ -144,6 +134,7 @@ func init() {
 	})
 }
 
+// CustomRType stores an rtype that is only valid for this DSP.
 type CustomRType struct {
 	Name     string
 	Provider string

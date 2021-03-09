@@ -1,5 +1,6 @@
 ---
 layout: default
+title: Examples
 ---
 
 # Examples
@@ -20,8 +21,8 @@ D('example.com', REG, DnsProvider('GCLOUD'),
     MX('mail', 10, 'mailserver'),
     MX('mail', 20, 'mailqueue'),
     TXT('the', 'message'),
-    NS('delegated', 'ns1.dnsexample.com.'),
-    NS('delegated', 'ns2.dnsexample.com.')
+    NS('department2', 'ns1.dnsexample.com.'), // use different nameservers
+    NS('department2', 'ns2.dnsexample.com.') // for department2.example.com
 )
 
 {% endhighlight %}
@@ -30,10 +31,17 @@ D('example.com', REG, DnsProvider('GCLOUD'),
 
 {% highlight javascript %}
 
+var mailTTL = TTL('1h');
+
 D('example.com', registrar,
+    NAMESERVER_TTL('10m'), // On domain apex NS RRs
     DefaultTTL('5m'), // Default for a domain
+
+    MX('@', 5, '1.2.3.4', mailTTL), // use variable to
+    MX('@', 10, '4.3.2.1', mailTTL), // set TTL
+
     A('@', '1.2.3.4', TTL('10m')), // individual record
-    {'ns_ttl': '600'} // On domain apex NS RRs
+    CNAME('mail', 'mx01') // TTL of 5m, as defined per DefaultTTL()
 );
 
 {% endhighlight %}
@@ -45,8 +53,8 @@ D('example.com', registrar,
 var addrA = IP('1.2.3.4')
 
 D('example.com', REG, DnsProvider('R53'),
-    A('@', addrA), //1.2.3.4
-    A('www', addrA + 1), //1.2.3.5
+    A('@', addrA), // 1.2.3.4
+    A('www', addrA + 1), // 1.2.3.5
 )
 {% endhighlight %}
 
@@ -135,5 +143,17 @@ D('example2.com', REG, DnsProvider('R53',2), DnsProvider('GCLOUD',2),
 D('example3.com', REG, DnsProvider('R53'), DnsProvider('GCLOUD',0),
    A('@', '1.2.3.4')
 )
+
+{% endhighlight %}
+
+## Set default records modifiers
+
+{% highlight javascript %}
+
+DEFAULTS(
+	NAMESERVER_TTL('24h'),
+	DefaultTTL('12h'),
+	CF_PROXY_DEFAULT_OFF
+);
 
 {% endhighlight %}
